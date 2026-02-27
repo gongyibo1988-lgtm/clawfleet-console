@@ -28,9 +28,9 @@ def test_normalize_copy_skill_names_invalid() -> None:
 def test_resolve_sync_servers_requires_explicit_when_more_than_two() -> None:
     config = _config(
         [
-            ServerConfig(name="s1", ssh_host="root@203.0.113.10"),
-            ServerConfig(name="s2", ssh_host="root@203.0.113.11"),
-            ServerConfig(name="s3", ssh_host="root@203.0.113.12"),
+            ServerConfig(name="s1", ssh_host="<SSH_USER>@203.0.113.10"),
+            ServerConfig(name="s2", ssh_host="<SSH_USER>@203.0.113.11"),
+            ServerConfig(name="s3", ssh_host="<SSH_USER>@203.0.113.12"),
         ]
     )
     with pytest.raises(ValueError, match="required when servers > 2"):
@@ -40,8 +40,8 @@ def test_resolve_sync_servers_requires_explicit_when_more_than_two() -> None:
 def test_resolve_sync_servers_supports_lookup_by_name() -> None:
     config = _config(
         [
-            ServerConfig(name="s1", ssh_host="root@203.0.113.10"),
-            ServerConfig(name="s2", ssh_host="root@203.0.113.11"),
+            ServerConfig(name="s1", ssh_host="<SSH_USER>@203.0.113.10"),
+            ServerConfig(name="s2", ssh_host="<SSH_USER>@203.0.113.11"),
         ]
     )
     src, dst = _resolve_sync_servers(config, mode="one_way", source_server_input="s2", target_server_input="s1")

@@ -32,7 +32,7 @@ def test_is_error_line() -> None:
 
 
 def test_parse_runtime_payload() -> None:
-    server = ServerConfig(name="广州服务器", ssh_host="root@203.0.113.10")
+    server = ServerConfig(name="server-a", ssh_host="<SSH_USER>@203.0.113.10")
     status = parse_runtime_payload(
         '{"window_hours":24,"agent_timeseries":[{"hour":"02-26 10:00","sessions":1,"errors":0}],'
         '"agent_rank":[{"agent":"main","sessions_24h":1,"errors_24h":0,"error_rate":0.0,'
@@ -42,7 +42,7 @@ def test_parse_runtime_payload() -> None:
         server=server,
         window_hours=24,
     )
-    assert status.server_name == "广州服务器"
+    assert status.server_name == "server-a"
     assert status.window_hours == 24
     assert status.agent_timeseries[0]["sessions"] == 1
     assert status.agent_rank[0]["agent"] == "main"

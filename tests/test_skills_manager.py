@@ -41,8 +41,8 @@ def _config() -> AppConfig:
     return AppConfig(
         poll_interval_seconds=5,
         servers=[
-            ServerConfig(name="广州服务器", ssh_host="root@203.0.113.10"),
-            ServerConfig(name="雅加达服务器", ssh_host="root@203.0.113.11"),
+            ServerConfig(name="server-a", ssh_host="<SSH_USER>@203.0.113.10"),
+            ServerConfig(name="server-b", ssh_host="<SSH_USER>@203.0.113.11"),
         ],
         sync=SyncConfig(),
     )
@@ -69,8 +69,8 @@ def test_list_skills_parses_json() -> None:
         payload = list_skills(_config(), runner)  # type: ignore[arg-type]
     finally:
         skills_manager._fetch_market_catalog = original  # type: ignore[assignment]
-    assert "广州服务器" in payload["servers"]
-    skills = payload["servers"]["广州服务器"]["skills"]
+    assert "server-a" in payload["servers"]
+    skills = payload["servers"]["server-a"]["skills"]
     assert skills[0]["name"] == "demo"
     assert skills[0]["skill_type"] == "official"
     assert skills[1]["skill_type"] == "custom"
@@ -91,13 +91,13 @@ def test_install_skill_market_selected_mode() -> None:
     payload = install_skill(
         _config(),
         runner,
-        server="广州服务器",
+        server="server-a",
         repo_url=None,
         prompt=None,
         market_path="skills/.curated/notion-research-documentation",
         market_name="notion-research-documentation",
     )
-    assert payload["servers"]["广州服务器"]["mode"] == "market_selected"
+    assert payload["servers"]["server-a"]["mode"] == "market_selected"
 
 
 def test_search_market_skills_top5() -> None:
@@ -117,7 +117,7 @@ def test_search_market_skills_top5() -> None:
 def test_copy_skill_between_servers_validates_name() -> None:
     runner = FakeRunner(CommandResult(returncode=0, stdout="", stderr=""))
     try:
-        copy_skill_between_servers(_config(), runner, "广州服务器", "雅加达服务器", "../bad")
+        copy_skill_between_servers(_config(), runner, "server-a", "server-b", "../bad")
     except ValueError as exc:
         assert "invalid skill_name" in str(exc)
     else:
@@ -129,8 +129,8 @@ def test_copy_skills_between_servers_multi() -> None:
     payload = copy_skills_between_servers(
         _config(),
         runner,
-        "广州服务器",
-        "雅加达服务器",
+        "server-a",
+        "server-b",
         ["demo", "demo", "nested/skill"],
     )
     assert payload["ok"] is True
@@ -141,15 +141,15 @@ def test_copy_skills_between_servers_multi() -> None:
 
 def test_copy_skill_between_servers_uses_two_stage_rsync() -> None:
     runner = SpyRunner(CommandResult(returncode=0, stdout="ok", stderr=""))
-    payload = copy_skill_between_servers(_config(), runner, "广州服务器", "雅加达服务器", "demo")
+    payload = copy_skill_between_servers(_config(), runner, "server-a", "server-b", "demo")
     assert payload["ok"] is True
     assert len(runner.local_commands) == 2
     pull_cmd = runner.local_commands[0]
     push_cmd = runner.local_commands[1]
-    assert pull_cmd[-2].startswith("root@203.0.113.10:/root/.openclaw/workspace/skills/demo/")
+    assert pull_cmd[-2].startswith("<SSH_USER>@203.0.113.10:/root/.openclaw/workspace/skills/demo/")
     assert ":" not in pull_cmd[-1]
     assert ":" not in push_cmd[-2]
-    assert push_cmd[-1].startswith("root@203.0.113.11:/root/.openclaw/workspace/skills/demo/")
+    assert push_cmd[-1].startswith("<SSH_USER>@203.0.113.11:/root/.openclaw/workspace/skills/demo/")
 
 
 def test_sync_skills_incremental_builds_actions_and_executes() -> None:
@@ -160,16 +160,16 @@ def test_sync_skills_incremental_builds_actions_and_executes() -> None:
 
     skills_manager.list_skills = lambda config, _runner: {  # type: ignore[assignment]
         "servers": {
-            "广州服务器": {
-                "server_name": "广州服务器",
+            "server-a": {
+                "server_name": "server-a",
                 "skills": [
                     {"name": "alpha", "installed_ts": 100},
                     {"name": "beta", "installed_ts": 90},
                 ],
                 "error": None,
             },
-            "雅加达服务器": {
-                "server_name": "雅加达服务器",
+            "server-b": {
+                "server_name": "server-b",
                 "skills": [
                     {"name": "alpha", "installed_ts": 80},
                     {"name": "gamma", "installed_ts": 110},
@@ -202,9 +202,9 @@ def test_sync_skills_incremental_builds_actions_and_executes() -> None:
     assert payload["ok"] is True
     assert payload["total_actions"] == 3
     assert payload["ok_count"] == 3
-    assert ("广州服务器", "雅加达服务器", "alpha") in called
-    assert ("广州服务器", "雅加达服务器", "beta") in called
-    assert ("雅加达服务器", "广州服务器", "gamma") in called
+    assert ("server-a", "server-b", "alpha") in called
+    assert ("server-a", "server-b", "beta") in called
+    assert ("server-b", "server-a", "gamma") in called
 
 
 def test_parse_market_detail_output_extracts_features_and_examples() -> None:

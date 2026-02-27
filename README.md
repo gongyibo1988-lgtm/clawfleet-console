@@ -13,7 +13,7 @@ Local web console for Tencent Lighthouse multi-server operations:
 ## Quick Start
 
 ```bash
-cd /Users/yibo/Documents/codex/Temp-project/2026-02-26-openclaw-tencent-console
+cd 2026-02-26-openclaw-tencent-console
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -60,7 +60,7 @@ Host claw-b
 ## Test
 
 ```bash
-cd /Users/yibo/Documents/codex/Temp-project/2026-02-26-openclaw-tencent-console
+cd 2026-02-26-openclaw-tencent-console
 python3 -m pytest -q
 ```
 

@@ -48,8 +48,8 @@ class AppConfig:
 DEFAULT_CONFIG = AppConfig(
     poll_interval_seconds=5,
     servers=[
-        ServerConfig(name="server-1", ssh_host="root@203.0.113.10", gateway_port=18789),
-        ServerConfig(name="server-2", ssh_host="root@203.0.113.11", gateway_port=18789),
+        ServerConfig(name="server-1", ssh_host="<SSH_USER>@203.0.113.10", gateway_port=18789),
+        ServerConfig(name="server-2", ssh_host="<SSH_USER>@203.0.113.11", gateway_port=18789),
     ],
     sync=SyncConfig(),
 )

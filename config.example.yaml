@@ -1,11 +1,11 @@
 poll_interval_seconds: 5
 servers:
-  - name: 广州服务器
-    ssh_host: root@<SERVER_A_PUBLIC_IP>
+  - name: server-a
+    ssh_host: <SSH_USER>@<SERVER_A_PUBLIC_IP>
     gateway_port: 18789
     service_name: openclaw-gateway.service
-  - name: 雅加达服务器
-    ssh_host: root@<SERVER_B_PUBLIC_IP>
+  - name: server-b
+    ssh_host: <SSH_USER>@<SERVER_B_PUBLIC_IP>
     gateway_port: 18789
     service_name: openclaw-gateway.service
 sync:

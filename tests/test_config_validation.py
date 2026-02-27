@@ -7,8 +7,8 @@ def _base_config() -> dict:
     return {
         "poll_interval_seconds": 5,
         "servers": [
-            {"name": "server-1", "ssh_host": "root@203.0.113.10"},
-            {"name": "server-2", "ssh_host": "root@203.0.113.11"},
+            {"name": "server-1", "ssh_host": "<SSH_USER>@203.0.113.10"},
+            {"name": "server-2", "ssh_host": "<SSH_USER>@203.0.113.11"},
         ],
         "sync": {
             "roots": ["/root/files"],
