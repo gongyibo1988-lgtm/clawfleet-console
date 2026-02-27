@@ -3,12 +3,15 @@
 Local web console for Tencent Lighthouse multi-server operations:
 
 - Dashboard for SSH reachability, system summary, and OpenClaw gateway status
+- Fleet page for hybrid-cloud overview (cloud + edge-local nodes)
 - Agent/Subagent runtime analytics (24h trends + rank tables)
+- Local alert center with rule validation + event feed
 - One-click maintenance actions (`更新` / `备份`) across all servers
 - Skills page to list installed skills per server, search Top 5 market candidates before install, and copy selected skills between servers
 - Cron page to inspect root/system scheduled jobs, 24h+7d execution summary, date-collapsed logs, and open output text files in TextEdit
 - Sync plan and execution (choose any source/target pair, or bidirectional with conflict decisions)
 - One-click SSH terminal launch on macOS Terminal
+- Built-in security: session auth + CSRF + high-risk action second-factor (macOS biometric preferred, fallback code)
 
 ## Quick Start
 
@@ -28,10 +31,21 @@ Open `http://127.0.0.1:8088`.
 Edit `config.yaml`.
 
 - `servers`: one or more SSH hosts with display names
+- `servers[].type`: `cloud` or `edge-local`
+- `servers[].labels`: node tags for grouping/filtering
+- `servers[].enabled`: whether to include node in polling
 - `sync.roots`: roots to sync (defaults to `/root/files`, `/root/.openclaw/workspace`)
 - `sync.excludes`: glob exclusions for secret/sensitive files
 - `sync.allow_delete`: default delete policy
 - `sync.ssh_key_path`: local key path for `ssh` / `rsync`
+- `alerts.rules`: local alert rules (gateway/disk/agent error rate/unreachable)
+- `security.enable_auth`: protect all `/api/*` with login session
+- `security.username` / `security.password`: console login credentials
+- `security.operation_confirm_code`: second-factor code for high-risk operations
+- `security.prefer_macos_biometric`: use macOS system auth dialog first on confirm
+
+> Default login flow now uses macOS biometric auth (Touch ID/system auth dialog).  
+> Keep `security.password` as emergency fallback only, and update `security.operation_confirm_code` in `config.yaml`.
 
 ## Recommended `~/.ssh/config` (redacted template)
 

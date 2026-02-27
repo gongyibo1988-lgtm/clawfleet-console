@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import time
 
 from app.parsers import parse_kv_output
 from app.config import AppConfig, ServerConfig
@@ -23,6 +24,7 @@ def build_remote_status_command(server: ServerConfig, sync_roots: list[str]) -> 
     cmd = rf'''bash -lc '
 set +e
 printf "hostname=%s\n" "$(hostname 2>/dev/null)"
+printf "remote_epoch=%s\n" "$(date +%s 2>/dev/null)"
 printf "uptime=%s\n" "$(uptime 2>/dev/null | tr -s " " | sed "s/^ //")"
 printf "loadavg=%s\n" "$(cat /proc/loadavg 2>/dev/null | awk "{{print $1\" \"$2\" \"$3}}")"
 printf "mem_total_mb=%s\n" "$(awk "/MemTotal:/ {{printf \"%.0f\", \$2/1024}}" /proc/meminfo 2>/dev/null)"
@@ -45,7 +47,9 @@ done
 def collect_server_status(runner: SSHRunner, server: ServerConfig, sync_roots: list[str]) -> ServerStatus:
     now = datetime.now(timezone.utc).isoformat()
     try:
+        ping_start = time.perf_counter()
         ping = runner.run_ssh(server.ssh_host, "echo ok", timeout=10)
+        latency_ms = int((time.perf_counter() - ping_start) * 1000)
         if ping.returncode != 0 or ping.stdout.strip() != "ok":
             return ServerStatus(
                 server=server.name,
@@ -66,6 +70,11 @@ def collect_server_status(runner: SSHRunner, server: ServerConfig, sync_roots: l
             )
 
         parsed = parse_kv_output(result.stdout)
+        parsed["ssh_latency_ms"] = str(latency_ms)
+        remote_epoch = parsed.get("remote_epoch")
+        if remote_epoch and str(remote_epoch).isdigit():
+            clock_offset = int(datetime.now(timezone.utc).timestamp()) - int(str(remote_epoch))
+            parsed["clock_offset_sec"] = str(clock_offset)
         return ServerStatus(
             server=server.name,
             reachable=True,
@@ -84,12 +93,13 @@ def collect_server_status(runner: SSHRunner, server: ServerConfig, sync_roots: l
 
 def collect_all_status(config: AppConfig, runner: SSHRunner) -> dict[str, dict]:
     payload: dict[str, dict] = {}
-    if not config.servers:
+    enabled_servers = [server for server in config.servers if server.enabled]
+    if not enabled_servers:
         return payload
-    with ThreadPoolExecutor(max_workers=len(config.servers)) as pool:
+    with ThreadPoolExecutor(max_workers=len(enabled_servers)) as pool:
         futures = {
             pool.submit(collect_server_status, runner, server, config.sync.roots): server
-            for server in config.servers
+            for server in enabled_servers
         }
         for future in as_completed(futures):
             server = futures[future]

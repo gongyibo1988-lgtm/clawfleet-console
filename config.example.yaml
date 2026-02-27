@@ -2,10 +2,16 @@ poll_interval_seconds: 5
 servers:
   - name: server-a
     ssh_host: <SSH_USER>@<SERVER_A_PUBLIC_IP>
+    type: cloud
+    labels: [prod, cn]
+    enabled: true
     gateway_port: 18789
     service_name: openclaw-gateway.service
   - name: server-b
     ssh_host: <SSH_USER>@<SERVER_B_PUBLIC_IP>
+    type: edge-local
+    labels: [home-lab, edge]
+    enabled: true
     gateway_port: 18789
     service_name: openclaw-gateway.service
 sync:
@@ -20,3 +26,20 @@ sync:
     - "**/.codex/**"
   allow_delete: false
   ssh_key_path: /ABS/PATH/TO/YOUR/SSH_PRIVATE_KEY
+alerts:
+  rules:
+    - name: gateway-inactive
+      type: gateway_inactive
+      severity: critical
+    - name: disk-high-usage
+      type: disk_usage_percent
+      threshold: 85
+      severity: warning
+security:
+  enable_auth: true
+  username: admin
+  password: CHANGE_ME_PASSWORD
+  session_ttl_seconds: 43200
+  operation_confirm_code: CHANGE_ME_CONFIRM_CODE
+  confirm_ttl_seconds: 120
+  prefer_macos_biometric: true

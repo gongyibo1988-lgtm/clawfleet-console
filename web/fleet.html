@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>混合云 - OpenClaw 控制中心</title>
+    <style>
+      :root {
+        --panel: #fbfdff;
+        --ink: #112033;
+        --ink-muted: #57657a;
+        --line: #cdd9e8;
+        --ok: #117a46;
+        --warn: #b06d00;
+        --bad: #b12525;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "IBM Plex Sans", "Segoe UI", "PingFang SC", sans-serif;
+        background:
+          radial-gradient(circle at 15% 10%, #d4e5ff 0%, rgba(212,229,255,0) 35%),
+          radial-gradient(circle at 90% 0%, #d8f4f1 0%, rgba(216,244,241,0) 30%),
+          linear-gradient(180deg, #ecf3fb 0%, #e6edf5 100%);
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 26px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(251, 253, 255, 0.86);
+        backdrop-filter: blur(8px);
+      }
+      .brand { display: flex; gap: 12px; align-items: center; }
+      .brand-mark { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #0f437f, #1d7b5b); }
+      .brand h1 { margin: 0; font-size: 18px; line-height: 1.2; }
+      .brand p { margin: 2px 0 0; font-size: 12px; color: var(--ink-muted); }
+      .nav { display: flex; gap: 10px; position: absolute; left: 50%; transform: translateX(-50%); }
+      .nav a { text-decoration: none; color: var(--ink); padding: 8px 12px; border: 1px solid transparent; border-radius: 10px; }
+      .nav a:hover { border-color: var(--line); background: rgba(255, 255, 255, 0.7); }
+      .nav a.active { border-color: #b7cae2; background: rgba(241, 247, 255, 0.95); }
+      main { max-width: 1280px; margin: 0 auto; padding: 24px; display: grid; gap: 14px; }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+      .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      .summary { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; margin-top: 10px; }
+      .summary-item { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 8px 10px; }
+      .summary-item .k { font-size: 12px; color: var(--ink-muted); }
+      .summary-item .v { font-size: 20px; font-weight: 700; }
+      .status { margin-top: 10px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+      .status.ok { border-color: #98d5b3; color: var(--ok); background: #edf9f2; }
+      .status.bad { border-color: #f0b3b3; color: var(--bad); background: #fff2f2; }
+      .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
+      .node-card { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 10px; }
+      .node-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .pill { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); color: var(--ink-muted); }
+      .pill.ok { border-color: #98d5b3; color: var(--ok); }
+      .pill.bad { border-color: #f0b3b3; color: var(--bad); }
+      .pill.warn { border-color: #f3d6a0; color: var(--warn); }
+      .muted { color: var(--ink-muted); font-size: 12px; }
+      button {
+        border: 1px solid #b9cbe1;
+        background: #f9fcff;
+        color: var(--ink);
+        border-radius: 10px;
+        padding: 7px 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      pre { margin: 8px 0 0; border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 10px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 260px; overflow: auto; }
+      .alerts-list { display: grid; gap: 8px; margin-top: 8px; }
+      .alert-item { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 8px 10px; font-size: 13px; }
+      @media (max-width: 760px) {
+        header { flex-direction: column; align-items: flex-start; gap: 10px; }
+        .nav { position: static; transform: none; }
+        .summary { grid-template-columns: 1fr 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <h1>OpenClaw 控制中心</h1>
+          <p>混合云节点管理</p>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="/">总览</a>
+        <a class="active" href="/fleet">混合云</a>
+        <a href="/sync">同步</a>
+        <a href="/skills">技能</a>
+        <a href="/cron">定时任务</a>
+        <a href="/settings">设置</a>
+      </nav>
+      <button id="fleet-refresh-btn">立即刷新</button>
+    </header>
+    <main>
+      <section class="panel">
+        <div class="toolbar">
+          <div>
+            <h2 style="margin:0;">混合云总览</h2>
+            <p class="muted" id="fleet-generated-at">等待数据...</p>
+          </div>
+        </div>
+        <div class="summary">
+          <div class="summary-item"><div class="k">节点总数</div><div id="fleet-total" class="v">0</div></div>
+          <div class="summary-item"><div class="k">在线节点</div><div id="fleet-online" class="v">0</div></div>
+          <div class="summary-item"><div class="k">在线率</div><div id="fleet-online-rate" class="v">0%</div></div>
+          <div class="summary-item"><div class="k">网关运行率</div><div id="fleet-gw-rate" class="v">0%</div></div>
+          <div class="summary-item"><div class="k">异常节点</div><div id="fleet-abnormal" class="v">0</div></div>
+        </div>
+        <div id="fleet-status" class="status">等待加载...</div>
+      </section>
+
+      <section class="panel">
+        <h3 style="margin:0 0 8px;">节点列表</h3>
+        <div id="fleet-nodes" class="grid"></div>
+      </section>
+
+      <section class="panel">
+        <h3 style="margin:0 0 8px;">告警中心</h3>
+        <div id="fleet-alert-status" class="status">等待加载...</div>
+        <div id="fleet-alerts" class="alerts-list"></div>
+      </section>
+
+      <section class="panel">
+        <h3 style="margin:0 0 8px;">节点自检输出</h3>
+        <pre id="fleet-check-output">点击节点卡片上的“节点自检”查看结果</pre>
+      </section>
+    </main>
+    <script src="/web/app.js"></script>
+    <script>
+      window.OpenClawApp.renderFleet();
+    </script>
+  </body>
+</html>

@@ -17,6 +17,9 @@ class ServerConfig:
     ssh_host: str
     gateway_port: int = 18789
     service_name: str = "openclaw-gateway.service"
+    type: str = "cloud"
+    labels: list[str] = field(default_factory=list)
+    enabled: bool = True
 
 
 @dataclass
@@ -36,10 +39,28 @@ class SyncConfig:
 
 
 @dataclass
+class AlertsConfig:
+    rules: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class SecurityConfig:
+    enable_auth: bool = True
+    username: str = "admin"
+    password: str = "change-me"
+    session_ttl_seconds: int = 12 * 60 * 60
+    operation_confirm_code: str = "CHANGE_ME_CONFIRM_CODE"
+    confirm_ttl_seconds: int = 120
+    prefer_macos_biometric: bool = True
+
+
+@dataclass
 class AppConfig:
     poll_interval_seconds: int
     servers: list[ServerConfig]
     sync: SyncConfig
+    alerts: AlertsConfig = field(default_factory=AlertsConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -74,6 +95,9 @@ def _to_server(item: Any) -> ServerConfig:
             ssh_host=str(item["ssh_host"]),
             gateway_port=int(item.get("gateway_port", 18789)),
             service_name=str(item.get("service_name", "openclaw-gateway.service")),
+            type=str(item.get("type", "cloud")),
+            labels=[str(label) for label in item.get("labels", [])] if isinstance(item.get("labels", []), list) else [],
+            enabled=bool(item.get("enabled", True)),
         )
     except KeyError as exc:
         raise ConfigError(f"Missing server field: {exc}") from exc
@@ -97,6 +121,34 @@ def _to_sync(item: Any) -> SyncConfig:
     )
 
 
+def _to_alerts(item: Any) -> AlertsConfig:
+    if not isinstance(item, dict):
+        raise ConfigError("alerts must be an object")
+    rules = item.get("rules", [])
+    if not isinstance(rules, list):
+        raise ConfigError("alerts.rules must be a list")
+    normalized_rules: list[dict[str, Any]] = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            raise ConfigError("alerts.rules entries must be objects")
+        normalized_rules.append(dict(rule))
+    return AlertsConfig(rules=normalized_rules)
+
+
+def _to_security(item: Any) -> SecurityConfig:
+    if not isinstance(item, dict):
+        raise ConfigError("security must be an object")
+    return SecurityConfig(
+        enable_auth=bool(item.get("enable_auth", True)),
+        username=str(item.get("username", "admin")),
+        password=str(item.get("password", "change-me")),
+        session_ttl_seconds=int(item.get("session_ttl_seconds", 12 * 60 * 60)),
+        operation_confirm_code=str(item.get("operation_confirm_code", "CHANGE_ME_CONFIRM_CODE")),
+        confirm_ttl_seconds=int(item.get("confirm_ttl_seconds", 120)),
+        prefer_macos_biometric=bool(item.get("prefer_macos_biometric", True)),
+    )
+
+
 def _validate(merged: dict[str, Any]) -> AppConfig:
     servers_raw = merged.get("servers")
     if not isinstance(servers_raw, list) or not servers_raw:
@@ -108,15 +160,30 @@ def _validate(merged: dict[str, Any]) -> AppConfig:
         raise ConfigError("servers[].name must be unique")
     if len(set(hosts)) != len(hosts):
         raise ConfigError("servers[].ssh_host must be unique")
+    for server in servers:
+        if server.type not in {"cloud", "edge-local"}:
+            raise ConfigError("servers[].type must be cloud or edge-local")
     sync = _to_sync(merged.get("sync", {}))
+    alerts = _to_alerts(merged.get("alerts", {}))
+    security = _to_security(merged.get("security", {}))
     poll_interval = int(merged.get("poll_interval_seconds", 5))
     if poll_interval < 1:
         raise ConfigError("poll_interval_seconds must be >= 1")
+    if security.session_ttl_seconds < 60:
+        raise ConfigError("security.session_ttl_seconds must be >= 60")
+    if security.confirm_ttl_seconds < 10:
+        raise ConfigError("security.confirm_ttl_seconds must be >= 10")
+    if security.enable_auth and (not security.username.strip() or not security.password.strip()):
+        raise ConfigError("security.username/password must be non-empty when auth enabled")
+    if not security.operation_confirm_code.strip():
+        raise ConfigError("security.operation_confirm_code must be non-empty")
 
     return AppConfig(
         poll_interval_seconds=poll_interval,
         servers=servers,
         sync=sync,
+        alerts=alerts,
+        security=security,
     )
 
 

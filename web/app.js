@@ -1,15 +1,90 @@
 (function () {
-  async function api(path, options) {
+  const AUTH = {
+    csrfToken: null,
+    authenticated: false,
+    username: "",
+  };
+
+  function buildError(payload, status) {
+    if (payload && payload.detail) return new Error(typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail));
+    return new Error(`HTTP ${status}`);
+  }
+
+  async function rawApi(path, options) {
+    const method = (options && options.method) ? String(options.method).toUpperCase() : "GET";
+    const headers = { "Content-Type": "application/json", ...(options?.headers || {}) };
+    if (method !== "GET" && method !== "HEAD" && !path.startsWith("/api/auth/") && AUTH.csrfToken) {
+      headers["X-CSRF-Token"] = AUTH.csrfToken;
+    }
     const response = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       ...options,
+      headers,
     });
     const text = await response.text();
     const payload = text ? JSON.parse(text) : {};
-    if (!response.ok) {
-      throw new Error(payload.detail ? JSON.stringify(payload.detail) : `HTTP ${response.status}`);
+    return { response, payload };
+  }
+
+  async function api(path, options) {
+    const first = await rawApi(path, options);
+    if (first.response.ok) return first.payload;
+    if (first.response.status === 401 && !path.startsWith("/api/auth/")) {
+      const relogin = await ensureAuthenticated();
+      if (!relogin) throw new Error("未登录或认证失败");
+      const retry = await rawApi(path, options);
+      if (!retry.response.ok) throw buildError(retry.payload, retry.response.status);
+      return retry.payload;
     }
-    return payload;
+    throw buildError(first.payload, first.response.status);
+  }
+
+  async function promptLogin() {
+    const { response, payload } = await rawApi("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ method: "biometric" }),
+    });
+    if (!response.ok) throw buildError(payload, response.status);
+    AUTH.authenticated = true;
+    AUTH.username = payload.username || "biometric-user";
+    AUTH.csrfToken = payload.csrf_token || null;
+    return true;
+  }
+
+  async function ensureAuthenticated() {
+    const me = await rawApi("/api/auth/me");
+    if (me.response.ok) {
+      AUTH.authenticated = true;
+      AUTH.username = me.payload.username || "";
+      AUTH.csrfToken = me.payload.csrf_token || null;
+      return true;
+    }
+    AUTH.authenticated = false;
+    AUTH.csrfToken = null;
+    try {
+      return await promptLogin();
+    } catch (error) {
+      alert(`指纹登录失败：${error.message}`);
+      return false;
+    }
+  }
+
+  async function requestConfirmTicket(actionLabel) {
+    try {
+      const biometric = await api("/api/security/confirm", {
+        method: "POST",
+        body: JSON.stringify({ method: "biometric", action: actionLabel }),
+      });
+      return biometric.confirm_ticket;
+    } catch (error) {
+      const code = window.prompt(`请输入 ${actionLabel} 安全口令（指纹失败时回退）`);
+      if (!code) throw new Error("未输入安全口令");
+      const payload = await api("/api/security/confirm", {
+        method: "POST",
+        body: JSON.stringify({ method: "code", code, action: actionLabel }),
+      });
+      return payload.confirm_ticket;
+    }
   }
 
   function esc(text) {
@@ -252,6 +327,8 @@
   }
 
   async function renderDashboard() {
+    const authOk = await ensureAuthenticated();
+    if (!authOk) return;
     const cards = document.getElementById("cards");
     const updated = document.getElementById("updated-at");
     const refresh = document.getElementById("refresh");
@@ -273,9 +350,10 @@
       if (!confirm(`确认执行${label}（全部服务器）吗？`)) return;
       setOpsStatus(`${label}执行中...`);
       try {
+        const confirmTicket = await requestConfirmTicket(label);
         const response = await api(`/api/maintenance/${action}`, {
           method: "POST",
-          body: JSON.stringify({ server: "all" }),
+          body: JSON.stringify({ server: "all", confirm_ticket: confirmTicket }),
         });
         const values = Object.values(response.servers || {});
         const failed = values.filter((item) => !item.ok).length;
@@ -339,6 +417,8 @@
   }
 
   async function renderSync() {
+    const authOk = await ensureAuthenticated();
+    if (!authOk) return;
     const rootsNode = document.getElementById("roots");
     const planButton = document.getElementById("plan-btn");
     const runButton = document.getElementById("run-btn");
@@ -495,11 +575,13 @@
       }
       planOutput.textContent = "正在执行同步...";
       try {
+        const confirmTicket = await requestConfirmTicket("执行同步");
         const result = await api("/api/sync/run", {
           method: "POST",
           body: JSON.stringify({
             plan_id: currentPlan.plan_id,
             conflict_resolutions: collectConflictResolutions(),
+            confirm_ticket: confirmTicket,
           }),
         });
         planOutput.textContent = JSON.stringify(result, null, 2);
@@ -520,6 +602,8 @@
   }
 
   async function renderSettings() {
+    const authOk = await ensureAuthenticated();
+    if (!authOk) return;
     const pre = document.getElementById("config");
     const reload = document.getElementById("reload");
     const status = document.getElementById("settings-status");
@@ -565,6 +649,8 @@
   }
 
   async function renderSkills() {
+    const authOk = await ensureAuthenticated();
+    if (!authOk) return;
     const serverSelect = document.getElementById("skills-server");
     const repoInput = document.getElementById("skills-repo");
     const promptInput = document.getElementById("skills-prompt");
@@ -851,6 +937,7 @@
       setStatus(skillsStatus, "正在安装技能...");
       output.textContent = "正在安装...";
       try {
+        const confirmTicket = await requestConfirmTicket("安装技能");
         const payload = await api("/api/skills/install", {
           method: "POST",
           body: JSON.stringify({
@@ -859,6 +946,7 @@
             prompt: repo ? null : prompt || null,
             market_path: repo ? null : marketPath || null,
             market_name: repo ? null : marketName || null,
+            confirm_ticket: confirmTicket,
           }),
         });
         output.textContent = JSON.stringify(payload, null, 2);
@@ -897,6 +985,7 @@
         }
         setStatus(copyStatus, `正在复制 ${skillNames.length} 个技能...`);
         try {
+          const confirmTicket = await requestConfirmTicket("复制技能");
           const firstSkillName = skillNames[0] || null;
           const payload = await api("/api/skills/copy", {
             method: "POST",
@@ -905,6 +994,7 @@
               target_server: targetServer,
               skill_names: skillNames,
               skill_name: firstSkillName,
+              confirm_ticket: confirmTicket,
             }),
           });
           output.textContent = JSON.stringify(payload, null, 2);
@@ -929,9 +1019,10 @@
         if (!confirm("确认按增量策略同步所有服务器技能吗？")) return;
         setStatus(syncSkillsStatus, "正在执行增量同步...");
         try {
+          const confirmTicket = await requestConfirmTicket("增量同步技能");
           const payload = await api("/api/skills/sync", {
             method: "POST",
-            body: JSON.stringify({}),
+            body: JSON.stringify({ confirm_ticket: confirmTicket }),
           });
           output.textContent = JSON.stringify(payload, null, 2);
           if (payload.ok) {
@@ -955,6 +1046,8 @@
   }
 
   async function renderCron() {
+    const authOk = await ensureAuthenticated();
+    if (!authOk) return;
     const refreshBtn = document.getElementById("cron-refresh-btn");
     const listStatus = document.getElementById("cron-list-status");
     const detailStatus = document.getElementById("cron-detail-status");
@@ -1103,8 +1196,141 @@
     await loadList();
   }
 
+  async function renderFleet() {
+    const authOk = await ensureAuthenticated();
+    if (!authOk) return;
+    const refreshBtn = document.getElementById("fleet-refresh-btn");
+    const generatedNode = document.getElementById("fleet-generated-at");
+    const statusNode = document.getElementById("fleet-status");
+    const alertStatusNode = document.getElementById("fleet-alert-status");
+    const nodesNode = document.getElementById("fleet-nodes");
+    const alertsNode = document.getElementById("fleet-alerts");
+    const checkOutputNode = document.getElementById("fleet-check-output");
+    const totalNode = document.getElementById("fleet-total");
+    const onlineNode = document.getElementById("fleet-online");
+    const onlineRateNode = document.getElementById("fleet-online-rate");
+    const gwRateNode = document.getElementById("fleet-gw-rate");
+    const abnormalNode = document.getElementById("fleet-abnormal");
+
+    function setStatus(node, message, kind) {
+      if (!node) return;
+      node.className = "status";
+      if (kind) node.classList.add(kind);
+      node.textContent = message;
+    }
+
+    function riskPill(level) {
+      if (level === "critical") return '<span class="pill bad">critical</span>';
+      if (level === "warning") return '<span class="pill warn">warning</span>';
+      return '<span class="pill ok">ok</span>';
+    }
+
+    function renderNodeCard(node) {
+      const labels = Array.isArray(node.labels) && node.labels.length
+        ? node.labels.map((item) => `<span class="pill">${esc(item)}</span>`).join("")
+        : '<span class="pill">no-label</span>';
+      const reasons = Array.isArray(node.risk_reasons) && node.risk_reasons.length
+        ? node.risk_reasons.join(" / ")
+        : "none";
+      const diskRisks = Array.isArray(node.disk_risks) && node.disk_risks.length
+        ? node.disk_risks.map((item) => `${item.path}: ${item.usage_percent}%`).join(" | ")
+        : "none";
+      return `<article class="node-card">
+        <div class="node-head">
+          <div>
+            <strong>${esc(node.name)}</strong>
+            <span class="pill">${esc(node.type)}</span>
+            ${node.reachable ? '<span class="pill ok">online</span>' : '<span class="pill bad">offline</span>'}
+            ${riskPill(node.risk_level)}
+          </div>
+          <button data-fleet-check="${esc(node.name)}">节点自检</button>
+        </div>
+        <div class="muted">SSH: ${esc(node.ssh_host)}</div>
+        <div style="margin-top:6px;">${labels}</div>
+        <div class="muted" style="margin-top:6px;">最后心跳：${esc(node.last_heartbeat || "-")} · 延迟：${esc(node.ssh_latency_ms || "-")}ms · 时钟偏移：${esc(node.clock_offset_sec || "-")}s</div>
+        <div class="muted" style="margin-top:6px;">Gateway: ${esc(node.gateway_status || "unknown")} / 端口: ${esc(node.gateway_port_listen || "unknown")}</div>
+        <div class="muted" style="margin-top:6px;">24h Agent: ${esc(node.agent_sessions_24h || 0)} 会话 / ${esc(node.agent_errors_24h || 0)} 错误 / ${esc(node.agent_error_rate_24h || 0)}%</div>
+        <div class="muted" style="margin-top:6px;">风险原因：${esc(reasons)}</div>
+        <div class="muted" style="margin-top:6px;">磁盘风险：${esc(diskRisks)}</div>
+      </article>`;
+    }
+
+    function renderAlerts(events) {
+      if (!alertsNode) return;
+      if (!events || !events.length) {
+        alertsNode.innerHTML = '<div class="alert-item">暂无告警</div>';
+        return;
+      }
+      alertsNode.innerHTML = events
+        .slice(0, 50)
+        .map((event) => `<div class="alert-item">
+          <strong>${esc(event.severity)}</strong> · ${esc(event.server)} · ${esc(event.rule_name)}
+          <div class="muted">${esc(event.message || "-")}</div>
+          <div class="muted">${esc(event.observed_at || "-")}</div>
+        </div>`)
+        .join("");
+    }
+
+    async function runNodeCheck(serverName) {
+      checkOutputNode.textContent = `正在检查 ${serverName} ...`;
+      try {
+        const payload = await api("/api/fleet/node/check", {
+          method: "POST",
+          body: JSON.stringify({ server_name: serverName }),
+        });
+        checkOutputNode.textContent = JSON.stringify(payload, null, 2);
+      } catch (error) {
+        checkOutputNode.textContent = `自检失败: ${error.message}`;
+      }
+    }
+
+    function bindCheckButtons() {
+      if (!nodesNode) return;
+      nodesNode.querySelectorAll("[data-fleet-check]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          await runNodeCheck(button.getAttribute("data-fleet-check"));
+        });
+      });
+    }
+
+    async function load() {
+      setStatus(statusNode, "正在加载混合云总览...");
+      setStatus(alertStatusNode, "正在加载告警...");
+      try {
+        const [fleet, alerts] = await Promise.all([api("/api/fleet/overview"), api("/api/alerts")]);
+        const summary = fleet.summary || {};
+        if (generatedNode) generatedNode.textContent = `更新时间：${fleet.generated_at || "-"}`;
+        if (totalNode) totalNode.textContent = String(summary.total_nodes || 0);
+        if (onlineNode) onlineNode.textContent = String(summary.reachable_nodes || 0);
+        if (onlineRateNode) onlineRateNode.textContent = `${summary.online_rate || 0}%`;
+        if (gwRateNode) gwRateNode.textContent = `${summary.gateway_active_rate || 0}%`;
+        if (abnormalNode) abnormalNode.textContent = String(summary.abnormal_nodes || 0);
+        const nodes = Array.isArray(fleet.nodes) ? fleet.nodes : [];
+        if (nodesNode) {
+          nodesNode.innerHTML = nodes.length ? nodes.map(renderNodeCard).join("") : '<article class="node-card">暂无节点</article>';
+        }
+        bindCheckButtons();
+        setStatus(statusNode, `加载完成：${nodes.length} 个节点`, "ok");
+        renderAlerts(alerts.events || []);
+        const alertSummary = alerts.summary || {};
+        setStatus(
+          alertStatusNode,
+          `告警总数 ${alertSummary.total || 0}（critical ${alertSummary.critical || 0} / warning ${alertSummary.warning || 0}）`,
+          (alertSummary.critical || 0) > 0 ? "bad" : "ok"
+        );
+      } catch (error) {
+        setStatus(statusNode, `加载失败：${error.message}`, "bad");
+        setStatus(alertStatusNode, `加载失败：${error.message}`, "bad");
+      }
+    }
+
+    if (refreshBtn) refreshBtn.addEventListener("click", load);
+    await load();
+  }
+
   window.OpenClawApp = {
     renderDashboard,
+    renderFleet,
     renderSync,
     renderSettings,
     renderSkills,

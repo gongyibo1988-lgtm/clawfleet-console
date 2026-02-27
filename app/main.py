@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import secrets
 import threading
 import time
 from datetime import datetime, timezone
+from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,8 +15,11 @@ from urllib.parse import urlparse
 
 from app.config import AppConfig, ConfigError, ServerConfig, load_config
 from app.agent_runtime_collector import collect_agent_runtime_all
+from app.alert_engine import evaluate_alerts, validate_alert_rules
 from app.cron_manager import collect_cron_jobs, get_cron_job_detail, open_cron_output_file
+from app.fleet_aggregator import build_fleet_overview, run_node_check
 from app.maintenance_actions import run_backup, run_update
+from app.security_manager import SecurityManager, SessionInfo
 from app.rsync_planner import build_plan
 from app.skills_manager import (
     copy_skills_between_servers,
@@ -39,10 +44,15 @@ class AppState:
     def __init__(self) -> None:
         self.config = load_config(PROJECT_ROOT)
         self.runner = SSHRunner(self.config.sync.ssh_key_path)
+        self.security = SecurityManager(self.config.security)
         self.status_lock = threading.Lock()
         self.status_cache: dict = {"servers": {}, "updated_at": None}
         self.runtime_lock = threading.Lock()
         self.agent_runtime_cache: dict = {"servers": {}, "updated_at": None, "window_hours": 24}
+        self.fleet_lock = threading.Lock()
+        self.fleet_cache: dict = {"generated_at": None, "summary": {}, "groups": {}, "nodes": []}
+        self.alerts_lock = threading.Lock()
+        self.alerts_cache: dict = {"generated_at": None, "summary": {}, "events": [], "rules": []}
         self.plans_lock = threading.Lock()
         self.plans: dict[str, dict] = {}
         self.stop_event = threading.Event()
@@ -51,6 +61,7 @@ class AppState:
         cfg = load_config(PROJECT_ROOT)
         self.config = cfg
         self.runner = SSHRunner(cfg.sync.ssh_key_path)
+        self.security.refresh_config(cfg.security)
 
 
 state = AppState()
@@ -144,13 +155,58 @@ def _refresh_status_loop() -> None:
                         "error": f"agent runtime refresh failed: {exc}",
                     }
             last_runtime_refresh = now_ts
+
+        try:
+            with state.status_lock:
+                status_snapshot = dict(state.status_cache)
+            with state.runtime_lock:
+                runtime_snapshot = dict(state.agent_runtime_cache)
+            fleet = build_fleet_overview(
+                config=state.config,
+                status_cache=status_snapshot,
+                runtime_cache=runtime_snapshot,
+            )
+            alerts = evaluate_alerts(
+                config=state.config,
+                status_cache=status_snapshot,
+                runtime_cache=runtime_snapshot,
+            )
+            with state.fleet_lock:
+                state.fleet_cache = fleet
+            with state.alerts_lock:
+                state.alerts_cache = alerts
+        except Exception as exc:
+            with state.fleet_lock:
+                state.fleet_cache = {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "summary": {},
+                    "groups": {},
+                    "nodes": [],
+                    "error": f"fleet aggregation failed: {exc}",
+                }
+            with state.alerts_lock:
+                state.alerts_cache = {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "summary": {"total": 0, "critical": 0, "warning": 0, "info": 0, "by_server": {}},
+                    "events": [],
+                    "rules": [],
+                    "error": f"alert evaluation failed: {exc}",
+                }
         state.stop_event.wait(state.config.poll_interval_seconds)
 
 
-def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
+def _json_response(
+    handler: BaseHTTPRequestHandler,
+    status: int,
+    payload: dict,
+    extra_headers: dict[str, str] | None = None,
+) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
+    if extra_headers:
+        for key, value in extra_headers.items():
+            handler.send_header(key, value)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -187,6 +243,60 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         return
 
+    def _read_session_id(self) -> str | None:
+        raw = self.headers.get("Cookie", "")
+        if not raw:
+            return None
+        cookie = SimpleCookie()
+        cookie.load(raw)
+        morsel = cookie.get("clawfleet_session")
+        if morsel is None:
+            return None
+        return morsel.value
+
+    def _session(self) -> SessionInfo | None:
+        if not state.config.security.enable_auth:
+            return SessionInfo(session_id="local", username="local", csrf_token="local", expires_at=time.time() + 3600)
+        return state.security.get_session(self._read_session_id())
+
+    def _auth_required(self) -> SessionInfo | None:
+        session = self._session()
+        if session is None:
+            _json_response(self, HTTPStatus.UNAUTHORIZED, {"detail": "Unauthorized"})
+            return None
+        return session
+
+    def _csrf_required(self) -> bool:
+        if not state.config.security.enable_auth:
+            return True
+        session_id = self._read_session_id()
+        csrf = self.headers.get("X-CSRF-Token", "")
+        ok = state.security.validate_csrf(session_id, csrf)
+        if not ok:
+            _json_response(self, HTTPStatus.FORBIDDEN, {"detail": "CSRF token invalid"})
+        return ok
+
+    def _consume_confirm_ticket_or_400(self, body: dict) -> bool:
+        ticket = body.get("confirm_ticket")
+        if not isinstance(ticket, str) or not state.security.consume_confirm_ticket(ticket):
+            _json_response(self, HTTPStatus.BAD_REQUEST, {"detail": "confirm_ticket invalid or expired"})
+            return False
+        return True
+
+    def _verify_macos_biometric(self) -> tuple[bool, str]:
+        if platform.system() != "Darwin":
+            return False, "biometric verification is only available on macOS"
+        command = [
+            "/usr/bin/osascript",
+            "-e",
+            'do shell script "echo clawfleet-auth >/dev/null" with administrator privileges',
+        ]
+        result = state.runner.run_local(command, timeout=30)
+        if result.returncode == 0:
+            return True, "biometric verification ok"
+        message = result.stderr.strip() or result.stdout.strip() or "biometric verification failed"
+        return False, message
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -200,6 +310,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if path == "/settings":
             self._serve_file("settings.html", "text/html; charset=utf-8")
             return
+        if path == "/fleet":
+            self._serve_file("fleet.html", "text/html; charset=utf-8")
+            return
         if path == "/skills":
             self._serve_file("skills.html", "text/html; charset=utf-8")
             return
@@ -211,6 +324,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._serve_static(rel)
             return
 
+        if path == "/api/auth/me":
+            session = self._session()
+            if session is None:
+                _json_response(self, HTTPStatus.UNAUTHORIZED, {"authenticated": False})
+                return
+            _json_response(
+                self,
+                HTTPStatus.OK,
+                {"authenticated": True, "username": session.username, "csrf_token": session.csrf_token},
+            )
+            return
+
+        if path.startswith("/api/"):
+            if self._auth_required() is None:
+                return
+
         if path == "/api/status":
             with state.status_lock:
                 _json_response(self, HTTPStatus.OK, state.status_cache)
@@ -220,6 +349,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             payload = state.config.to_dict()
             if payload.get("sync", {}).get("ssh_key_path"):
                 payload["sync"]["ssh_key_path"] = "***"
+            if payload.get("security"):
+                payload["security"]["password"] = "***"
+                payload["security"]["operation_confirm_code"] = "***"
             _json_response(self, HTTPStatus.OK, payload)
             return
         if path == "/api/version":
@@ -229,6 +361,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if path == "/api/agent-runtime":
             with state.runtime_lock:
                 _json_response(self, HTTPStatus.OK, state.agent_runtime_cache)
+            return
+        if path == "/api/fleet/overview":
+            with state.fleet_lock:
+                _json_response(self, HTTPStatus.OK, state.fleet_cache)
+            return
+        if path == "/api/alerts":
+            with state.alerts_lock:
+                _json_response(self, HTTPStatus.OK, state.alerts_cache)
             return
         if path == "/api/skills/list":
             try:
@@ -259,6 +399,98 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             _json_response(self, HTTPStatus.BAD_REQUEST, {"detail": str(exc)})
             return
 
+        if path == "/api/auth/login":
+            method = str(body.get("method", "password") or "password")
+            username = str(body.get("username", ""))
+            password = str(body.get("password", ""))
+            if method == "biometric":
+                ok, message = self._verify_macos_biometric()
+                if not ok:
+                    _json_response(self, HTTPStatus.UNAUTHORIZED, {"detail": message})
+                    return
+                session_username = state.config.security.username or "biometric-user"
+            else:
+                if not state.security.authenticate_credentials(username, password):
+                    _json_response(self, HTTPStatus.UNAUTHORIZED, {"detail": "Invalid credentials"})
+                    return
+                session_username = username or state.config.security.username
+            session = state.security.create_session(username=session_username)
+            cookie_value = (
+                f"clawfleet_session={session.session_id}; Path=/; HttpOnly; SameSite=Strict; "
+                f"Max-Age={state.config.security.session_ttl_seconds}"
+            )
+            _json_response(
+                self,
+                HTTPStatus.OK,
+                {"ok": True, "username": session.username, "csrf_token": session.csrf_token, "method": method},
+                extra_headers={"Set-Cookie": cookie_value},
+            )
+            return
+
+        if path == "/api/auth/logout":
+            state.security.remove_session(self._read_session_id())
+            _json_response(
+                self,
+                HTTPStatus.OK,
+                {"ok": True},
+                extra_headers={"Set-Cookie": "clawfleet_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"},
+            )
+            return
+
+        if path.startswith("/api/"):
+            if self._auth_required() is None:
+                return
+            if not self._csrf_required():
+                return
+
+        high_risk_paths = {
+            "/api/maintenance/update",
+            "/api/maintenance/backup",
+            "/api/skills/install",
+            "/api/skills/copy",
+            "/api/skills/sync",
+            "/api/sync/run",
+        }
+        if path in high_risk_paths:
+            if not self._consume_confirm_ticket_or_400(body):
+                return
+
+        if path == "/api/security/confirm":
+            method = str(body.get("method", ""))
+            if not method:
+                method = "biometric" if state.config.security.prefer_macos_biometric else "code"
+            code = body.get("code")
+            if method not in {"biometric", "code"}:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"detail": "method must be biometric or code"})
+                return
+            if method == "biometric":
+                ok, message = self._verify_macos_biometric()
+                if not ok:
+                    _json_response(self, HTTPStatus.UNAUTHORIZED, {"detail": message})
+                    return
+            else:
+                if not isinstance(code, str) or not code:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"detail": "code must be non-empty string"})
+                    return
+            try:
+                ticket = state.security.create_confirm_ticket(
+                    code=code if method == "code" else state.config.security.operation_confirm_code
+                )
+            except ValueError:
+                _json_response(self, HTTPStatus.UNAUTHORIZED, {"detail": "confirm code invalid"})
+                return
+            _json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "method": method,
+                    "confirm_ticket": ticket,
+                    "expires_in_seconds": state.config.security.confirm_ttl_seconds,
+                },
+            )
+            return
+
         if path == "/api/reload-config":
             try:
                 state.reload_config()
@@ -266,6 +498,34 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 _json_response(self, HTTPStatus.BAD_REQUEST, {"detail": str(exc)})
                 return
             _json_response(self, HTTPStatus.OK, {"ok": True})
+            return
+        if path == "/api/fleet/node/check":
+            server_name = body.get("server_name")
+            if not isinstance(server_name, str) or not server_name:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"detail": "server_name must be non-empty string"})
+                return
+            try:
+                payload = run_node_check(state.config, state.runner, server_name)
+            except ValueError as exc:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"detail": str(exc)})
+                return
+            except Exception as exc:
+                _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"detail": str(exc)})
+                return
+            _json_response(self, HTTPStatus.OK, payload)
+            return
+        if path == "/api/alerts/rules/validate":
+            rules = body.get("rules")
+            try:
+                payload = validate_alert_rules(
+                    rules=rules,
+                    server_names=[server.name for server in state.config.servers if server.enabled],
+                )
+            except Exception as exc:
+                _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"detail": str(exc)})
+                return
+            status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.BAD_REQUEST
+            _json_response(self, status, payload)
             return
 
         if path == "/api/terminal/open":
