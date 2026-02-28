@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 
 WINDOW_HOURS = __WINDOW_HOURS__
 NOW = datetime.now(timezone.utc)
-ROOT = '/root/.openclaw/agents'
+ROOT = os.path.expanduser('~/.openclaw/agents')
 CUT = NOW - timedelta(hours=WINDOW_HOURS)
 
 hour_keys = []
