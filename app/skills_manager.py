@@ -15,7 +15,7 @@ from app.config import AppConfig, ServerConfig
 from app.ssh_runner import SSHRunner
 
 MARKET_API_URL = "https://api.github.com/repos/openai/skills/contents/skills/.curated?ref=main"
-OPENCLAW_SKILLS_ROOT = "/root/.openclaw/workspace/skills"
+OPENCLAW_SKILLS_ROOT = "$HOME/.openclaw/workspace/skills"
 
 
 def _resolve_servers(config: AppConfig, server: str | None) -> list[ServerConfig]:
@@ -42,7 +42,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 roots = [
-    (Path('/root/.openclaw/workspace/skills'), 'openclaw_workspace'),
+    (Path(os.path.expanduser('~/.openclaw/workspace/skills')), 'openclaw_workspace'),
 ]
 rows = []
 seen = set()
@@ -115,7 +115,7 @@ def _install_from_market_path_command(market_path: str, selected_name: str) -> s
     return rf"""bash -lc '
 set -e
 SLUG={shlex.quote(slug)}
-WORKDIR="/root/.openclaw/workspace"
+WORKDIR="$HOME/.openclaw/workspace"
 mkdir -p "$WORKDIR"
 
 if command -v clawhub >/dev/null 2>&1; then

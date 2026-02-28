@@ -28,7 +28,7 @@ else
   echo "openclaw update skipped: command not found"
 fi
 
-for root in /root/.codex/skills /root/.agents/skills; do
+for root in ~/.codex/skills ~/.agents/skills; do
   if [ -d "$root/.git" ]; then
     (cd "$root" && git pull --ff-only 2>&1) || true
   fi
@@ -48,10 +48,10 @@ def _backup_command() -> str:
     return r"""bash -lc '
 set -e
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_DIR="/root/files/openclaw-backups"
+BACKUP_DIR="$HOME/files/openclaw-backups"
 mkdir -p "$BACKUP_DIR"
 TARGET="$BACKUP_DIR/openclaw-backup-$TS.tgz"
-tar -czf "$TARGET" /root/.openclaw /root/.codex/skills /root/.agents/skills 2>/dev/null || tar -czf "$TARGET" /root/.openclaw /root/.codex/skills 2>/dev/null || true
+tar -czf "$TARGET" ~/.openclaw ~/.codex/skills ~/.agents/skills 2>/dev/null || tar -czf "$TARGET" ~/.openclaw ~/.codex/skills 2>/dev/null || true
 echo "backup_file=$TARGET"
 echo "status=done"
 '"""

@@ -24,7 +24,7 @@ class ServerConfig:
 
 @dataclass
 class SyncConfig:
-    roots: list[str] = field(default_factory=lambda: ["/root/files", "/root/.openclaw/workspace"])
+    roots: list[str] = field(default_factory=lambda: ["~/files", "~/.openclaw/workspace"])
     excludes: list[str] = field(
         default_factory=lambda: [
             "**/.env",
@@ -106,7 +106,7 @@ def _to_server(item: Any) -> ServerConfig:
 def _to_sync(item: Any) -> SyncConfig:
     if not isinstance(item, dict):
         raise ConfigError("sync must be an object")
-    roots = item.get("roots", ["/root/files", "/root/.openclaw/workspace"])
+    roots = item.get("roots", ["~/files", "~/.openclaw/workspace"])
     excludes = item.get("excludes", SyncConfig().excludes)
     if not isinstance(roots, list) or not all(isinstance(row, str) for row in roots):
         raise ConfigError("sync.roots must be a list of strings")

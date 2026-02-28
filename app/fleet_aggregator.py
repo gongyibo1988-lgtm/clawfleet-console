@@ -208,9 +208,9 @@ def run_node_check(config: AppConfig, runner: SSHRunner, server_name: str) -> di
         )
 
     path_checks = [
-        ("path_files_dir", "test -d /root/files && echo ok"),
-        ("path_workspace_dir", "test -d /root/.openclaw/workspace && echo ok"),
-        ("path_agents_dir", "test -d /root/.openclaw/agents && echo ok"),
+        ("path_files_dir", "test -d ~/files && echo ok"),
+        ("path_workspace_dir", "test -d ~/.openclaw/workspace && echo ok"),
+        ("path_agents_dir", "test -d ~/.openclaw/agents && echo ok"),
     ]
     for check_name, command in path_checks:
         ok = _check_command(runner, server.ssh_host, command)
