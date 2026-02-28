@@ -40,13 +40,27 @@
   }
 
   async function promptLogin() {
-    const { response, payload } = await rawApi("/api/auth/login", {
+    // Try biometric first; if it fails, fall back to password prompt
+    const bioResult = await rawApi("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ method: "biometric" }),
     });
+    if (bioResult.response.ok) {
+      AUTH.authenticated = true;
+      AUTH.username = bioResult.payload.username || "biometric-user";
+      AUTH.csrfToken = bioResult.payload.csrf_token || null;
+      return true;
+    }
+    // Biometric not available (e.g. Linux) — fall back to password
+    const username = window.prompt("用户名") || "";
+    const password = window.prompt("密码") || "";
+    const { response, payload } = await rawApi("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ method: "password", username, password }),
+    });
     if (!response.ok) throw buildError(payload, response.status);
     AUTH.authenticated = true;
-    AUTH.username = payload.username || "biometric-user";
+    AUTH.username = payload.username || username;
     AUTH.csrfToken = payload.csrf_token || null;
     return true;
   }
@@ -64,7 +78,7 @@
     try {
       return await promptLogin();
     } catch (error) {
-      alert(`指纹登录失败：${error.message}`);
+      alert(`登录失败：${error.message}`);
       return false;
     }
   }
